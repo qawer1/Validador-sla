@@ -1,0 +1,175 @@
+"""Validador de SLA — extensión: 4ta métrica, reporte JSON y umbrales documentados."""
+import json
+import logging
+from dataclasses import dataclass
+from statistics import fmean
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
+
+
+# ---------------------------------------------------------------------------
+# Parte 1 — Umbrales del acuerdo (ahora con la 4ta métrica)
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class UmbralSLA:
+    """Compromisos del acuerdo expresados como datos inmutables.
+
+    Justificación de cada umbral (ver justificacion_umbrales.md para el detalle):
+    - disponibilidad_min: 99.9 % es el estándar de mercado para SaaS/servicios
+      web estándar (43 min de caída tolerada al mes) — alcanzable sin
+      redundancia costosa.
+    - latencia_p95_max: 300 ms es un valor común en APIs REST orientadas a
+      usuario final; deja margen sobre el p50 observado en producción.
+    - tasa_error_max: 1 % tolera errores transitorios de red sin encubrir
+      fallos sistémicos.
+    - tasa_resolucion_min: 90 % de incidencias resueltas dentro del plazo
+      pactado (ventana de resolución) es alcanzable con un equipo de soporte
+      de tamaño normal y dejando margen para incidencias complejas.
+    """
+    disponibilidad_min: float = 99.9        # porcentaje mensual
+    latencia_p95_max: float = 300.0         # milisegundos
+    tasa_error_max: float = 1.0             # porcentaje de peticiones
+    tasa_resolucion_min: float = 90.0       # porcentaje de incidencias resueltas a tiempo
+
+    def __post_init__(self) -> None:
+        if not 0 < self.disponibilidad_min <= 100:
+            raise ValueError("La disponibilidad debe estar entre 0 y 100.")
+        if self.latencia_p95_max <= 0:
+            raise ValueError("La latencia máxima debe ser positiva.")
+        if not 0 <= self.tasa_error_max <= 100:
+            raise ValueError("La tasa de error debe estar entre 0 y 100.")
+        if not 0 <= self.tasa_resolucion_min <= 100:
+            raise ValueError("La tasa de resolución debe estar entre 0 y 100.")
+
+
+# ---------------------------------------------------------------------------
+# Parte 2 — Cálculo de indicadores
+# ---------------------------------------------------------------------------
+def percentil(valores: list[float], p: float) -> float:
+    """Percentil por interpolación lineal (equivale a numpy.percentile)."""
+    if not valores:
+        raise ValueError("Serie vacía: no es posible calcular el percentil.")
+    datos, k = sorted(valores), (len(valores) - 1) * p / 100
+    inf, sup = int(k), min(int(k) + 1, len(valores) - 1)
+    return datos[inf] + (datos[sup] - datos[inf]) * (k - inf)
+
+
+def calcular_metricas(muestras: list[dict], incidencias: list[dict]) -> dict:
+    """Disponibilidad, latencia p95, tasa de error y tasa de resolución.
+
+    `muestras`: lista de mediciones del servicio con las claves
+        ts, disponible (bool), latencia_ms (float), error (bool).
+    `incidencias`: lista de incidencias reportadas con las claves
+        ts, resuelta (bool), resuelta_a_tiempo (bool).
+    """
+    if not muestras:
+        raise ValueError("La serie de métricas está vacía.")
+
+    activas = [m for m in muestras if m.get("disponible")]
+    latencias = [float(m["latencia_ms"]) for m in activas]
+    errores = sum(1 for m in activas if m.get("error"))
+
+    total_incidencias = len(incidencias)
+    resueltas_a_tiempo = sum(1 for i in incidencias if i.get("resuelta_a_tiempo"))
+    tasa_resolucion = (
+        resueltas_a_tiempo / total_incidencias * 100 if total_incidencias else 100.0
+    )
+
+    return {
+        "disponibilidad": len(activas) / len(muestras) * 100,
+        "latencia_media": fmean(latencias) if latencias else 0.0,
+        "latencia_p95": percentil(latencias, 95) if latencias else 0.0,
+        "tasa_error": errores / len(activas) * 100 if activas else 100.0,
+        "tasa_resolucion": tasa_resolucion,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Parte 3 — Evaluación del cumplimiento
+# ---------------------------------------------------------------------------
+def evaluar(metricas: dict, umbral: UmbralSLA) -> dict:
+    """Compara cada indicador con su umbral y devuelve el veredicto."""
+    reglas = (
+        ("disponibilidad", metricas["disponibilidad"], umbral.disponibilidad_min, "min"),
+        ("latencia_p95", metricas["latencia_p95"], umbral.latencia_p95_max, "max"),
+        ("tasa_error", metricas["tasa_error"], umbral.tasa_error_max, "max"),
+        ("tasa_resolucion", metricas["tasa_resolucion"], umbral.tasa_resolucion_min, "min"),
+    )
+    veredicto = {}
+    for nombre, valor, limite, sentido in reglas:
+        cumple = valor >= limite if sentido == "min" else valor <= limite
+        veredicto[nombre] = {
+            "valor": round(valor, 3),
+            "limite": limite,
+            "cumple": cumple,
+            "desviacion": round(abs(valor - limite), 3),
+        }
+    return veredicto
+
+
+def detectar_violaciones(muestras: list[dict], umbral: UmbralSLA) -> list[dict]:
+    """Devuelve las muestras concretas que rompieron el acuerdo."""
+    return [
+        {"instante": m["ts"], "causa": "caida" if not m.get("disponible") else "latencia"}
+        for m in muestras
+        if not m.get("disponible") or float(m["latencia_ms"]) > umbral.latencia_p95_max
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Parte 4 — Reporte (consola + JSON), errores y ejecución
+# ---------------------------------------------------------------------------
+def reportar_consola(veredicto: dict, periodo: str) -> bool:
+    print(f"\nInforme de cumplimiento del SLA — periodo {periodo}")
+    for nombre, r in veredicto.items():
+        estado = "CUMPLE" if r["cumple"] else "INCUMPLE"
+        print(f"  {nombre:<18}{r['valor']:>9}  limite {r['limite']:>7}  {estado}")
+    return all(r["cumple"] for r in veredicto.values())
+
+
+def reportar_json(veredicto: dict, violaciones: list[dict], periodo: str, ruta_salida: str) -> None:
+    """Genera el informe de cumplimiento en formato JSON."""
+    informe = {
+        "periodo": periodo,
+        "cumple_general": all(r["cumple"] for r in veredicto.values()),
+        "indicadores": veredicto,
+        "violaciones": violaciones,
+    }
+    with open(ruta_salida, "w", encoding="utf-8") as archivo:
+        json.dump(informe, archivo, indent=2, ensure_ascii=False)
+    logging.info("Informe JSON generado en %s", ruta_salida)
+
+
+def main(
+    ruta_metricas: str = "metricas.json",
+    ruta_incidencias: str = "incidencias.json",
+    periodo: str = "2026-09",
+    ruta_informe_json: str = "informe.json",
+) -> int:
+    try:
+        with open(ruta_metricas, encoding="utf-8") as archivo:
+            muestras = json.load(archivo)
+        try:
+            with open(ruta_incidencias, encoding="utf-8") as archivo:
+                incidencias = json.load(archivo)
+        except FileNotFoundError:
+            incidencias = []
+
+        umbral = UmbralSLA()
+        metricas = calcular_metricas(muestras, incidencias)
+        veredicto = evaluar(metricas, umbral)
+        violaciones = detectar_violaciones(muestras, umbral)
+    except FileNotFoundError:
+        logging.error("Archivo de métricas no encontrado: %s", ruta_metricas)
+        return 2
+    except (json.JSONDecodeError, KeyError, ValueError) as exc:
+        logging.error("Datos de entrada inválidos: %s", exc)
+        return 3
+
+    cumple = reportar_consola(veredicto, periodo)
+    reportar_json(veredicto, violaciones, periodo, ruta_informe_json)
+    return 0 if cumple else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

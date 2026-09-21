@@ -1,0 +1,56 @@
+{
+  "periodo": "2026-09",
+  "cumple_general": false,
+  "indicadores": {
+    "disponibilidad": {
+      "valor": 99.722,
+      "limite": 99.9,
+      "cumple": false,
+      "desviacion": 0.178
+    },
+    "latencia_p95": {
+      "valor": 229.35,
+      "limite": 300.0,
+      "cumple": true,
+      "desviacion": 70.65
+    },
+    "tasa_error": {
+      "valor": 0.487,
+      "limite": 1.0,
+      "cumple": true,
+      "desviacion": 0.513
+    },
+    "tasa_resolucion": {
+      "valor": 88.0,
+      "limite": 90.0,
+      "cumple": false,
+      "desviacion": 2.0
+    }
+  },
+  "violaciones": [
+    {
+      "instante": "2026-09-01T14:30:00",
+      "causa": "latencia"
+    },
+    {
+      "instante": "2026-09-01T20:30:00",
+      "causa": "caida"
+    },
+    {
+      "instante": "2026-09-18T02:30:00",
+      "causa": "latencia"
+    },
+    {
+      "instante": "2026-09-18T16:00:00",
+      "causa": "caida"
+    },
+    {
+      "instante": "2026-09-21T07:30:00",
+      "causa": "caida"
+    },
+    {
+      "instante": "2026-09-25T10:30:00",
+      "causa": "caida"
+    }
+  ]
+}

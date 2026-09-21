@@ -1,0 +1,35 @@
+# Justificación de los umbrales del SLA
+
+## Disponibilidad mínima: 99.9 % mensual
+Es el estándar de facto para servicios SaaS y web estándar (ver "regla de los
+nueves" del módulo 1). Equivale a tolerar ~43 minutos de caída al mes, un
+margen realista para un servicio con un solo entorno de producción y sin
+redundancia activa entre zonas. Subir a 99.99 % exigiría alta disponibilidad
+multi-zona, que no se justifica para el alcance actual del proyecto.
+
+## Latencia p95 máxima: 300 ms
+Se fija sobre el percentil 95 (no el promedio) porque el promedio esconde la
+cola de la distribución. 300 ms deja margen razonable sobre la latencia p50
+observada en pruebas (~140-150 ms) y es un valor común en APIs REST
+orientadas a usuario final.
+
+## Tasa de error máxima: 1 %
+Tolera errores transitorios de red o reintentos normales sin encubrir fallos
+sistémicos del servicio. Un umbral más bajo (p. ej. 0.1 %) sería difícil de
+sostener sin mecanismos de reintento y circuit breakers más sofisticados.
+
+## Tasa de resolución de incidencias mínima: 90 %
+Definida como el porcentaje de incidencias reportadas que se resuelven
+dentro del plazo pactado (SLO de resolución) sobre el total de incidencias
+del período. Un 90 % es alcanzable con un equipo de soporte de tamaño normal,
+dejando un margen del 10 % para incidencias complejas que requieren
+escalamiento o dependen de terceros (proveedores externos, UC).
+
+## Nota sobre alcanzabilidad
+Los cuatro umbrales fueron validados corriendo el validador contra una serie
+de prueba de 1440 muestras (una cada 30 minutos durante 30 días) y 25
+incidencias simuladas. El resultado (ver `informe.json`) muestra que son
+umbrales exigentes pero realistas: en la serie de prueba, dos de los cuatro
+indicadores incumplieron por márgenes pequeños, lo cual es el comportamiento
+esperado de un umbral bien calibrado (ni siempre se cumple, ni se incumple
+sistemáticamente).
